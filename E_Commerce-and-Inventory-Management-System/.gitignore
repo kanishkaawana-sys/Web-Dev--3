@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+
+# Environment variables (never commit secrets)
+.env
+.env.*
+!.env.example
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editors / IDEs
+.vscode/
+.idea/
+*.swp
+
+# Runtime / coverage
+coverage/
+.nyc_output/
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# Build / temp
+dist/
+tmp/
+temp/

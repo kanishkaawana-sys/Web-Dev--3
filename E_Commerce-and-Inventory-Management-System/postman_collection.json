@@ -1,0 +1,936 @@
+{
+  "info": {
+    "name": "E-Commerce & Inventory System - Capstone API Tests",
+    "description": "Automated test suite for the Option 4 E-Commerce and Inventory Management System. Run the folders in order (Collection Runner or Newman). Run 'npm run seed' before every full run because the suite places orders, redeems a single-use coupon and creates reviews. Uses collection variables: baseUrl, accessToken, refreshToken, productId, orderId (plus helper variables set by the scripts).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+  },
+  "event": [
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": ["pm.test('Response time is under 3000ms', function () { pm.expect(pm.response.responseTime).to.be.below(3000); });"]
+      }
+    }
+  ],
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:5000" },
+    { "key": "accessToken", "value": "" },
+    { "key": "refreshToken", "value": "" },
+    { "key": "productId", "value": "" },
+    { "key": "orderId", "value": "" },
+    { "key": "oldRefreshToken", "value": "" },
+    { "key": "newUserToken", "value": "" },
+    { "key": "registerEmail", "value": "" },
+    { "key": "productId2", "value": "" },
+    { "key": "stockBefore", "value": "" },
+    { "key": "stockAfterOrder", "value": "" },
+    { "key": "numReviewsBefore", "value": "" },
+    { "key": "cancelOrderId", "value": "" },
+    { "key": "reviewId", "value": "" },
+    { "key": "newSku", "value": "" },
+    { "key": "newProductId", "value": "" },
+    { "key": "newCouponCode", "value": "" },
+    { "key": "couponExpiry", "value": "" },
+    { "key": "couponId", "value": "" },
+    { "key": "startDate", "value": "" },
+    { "key": "endDate", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "0. Health Check",
+      "item": [
+        {
+          "name": "API is up",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('API is up (200)', () => pm.response.to.have.status(200));",
+            "pm.test('success flag is true', () => pm.expect(pm.response.json().success).to.be.true);"
+          ] } }],
+          "request": { "auth": { "type": "noauth" }, "method": "GET", "header": [], "url": "{{baseUrl}}/api/health" }
+        }
+      ]
+    },
+    {
+      "name": "1. Authentication (JWT access + refresh)",
+      "item": [
+        {
+          "name": "Register new customer",
+          "event": [
+            { "listen": "prerequest", "script": { "type": "text/javascript", "exec": [
+              "pm.collectionVariables.set('registerEmail', 'newuser' + Date.now() + '@example.com');",
+              "pm.cookies.jar().clear(pm.collectionVariables.get('baseUrl'), function () {});"
+            ] } },
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "const j = pm.response.json();",
+              "pm.test('Registered with 201', () => pm.response.to.have.status(201));",
+              "pm.test('Access and refresh tokens returned', () => { pm.expect(j.data.accessToken).to.be.a('string'); pm.expect(j.data.refreshToken).to.be.a('string'); });",
+              "pm.test('Role is customer and password is not leaked', () => { pm.expect(j.data.user.role).to.eql('customer'); pm.expect(j.data.user).to.not.have.property('password'); });",
+              "pm.collectionVariables.set('newUserToken', j.data.accessToken);"
+            ] } }
+          ],
+          "request": { "auth": { "type": "noauth" }, "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"name\":\"New User\",\"email\":\"{{registerEmail}}\",\"password\":\"Passw0rd!123\"}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/auth/register" }
+        },
+        {
+          "name": "Register with duplicate email -> 409",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const j = pm.response.json();",
+            "pm.test('Duplicate email rejected with 409', () => pm.response.to.have.status(409));",
+            "pm.test('Error code is DUPLICATE_KEY', () => pm.expect(j.code).to.eql('DUPLICATE_KEY'));"
+          ] } }],
+          "request": { "auth": { "type": "noauth" }, "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"name\":\"New User\",\"email\":\"{{registerEmail}}\",\"password\":\"Passw0rd!123\"}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/auth/register" }
+        },
+        {
+          "name": "Register with role=admin is ignored (privilege escalation blocked)",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const j = pm.response.json();",
+            "pm.test('Registered with 201', () => pm.response.to.have.status(201));",
+            "pm.test('Role forced to customer', () => pm.expect(j.data.user.role).to.eql('customer'));"
+          ] } }],
+          "request": { "auth": { "type": "noauth" }, "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"name\":\"Sneaky\",\"email\":\"sneaky{{$timestamp}}@example.com\",\"password\":\"Passw0rd!123\",\"role\":\"admin\"}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/auth/register" }
+        },
+        {
+          "name": "Login with wrong password -> 401",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const j = pm.response.json();",
+            "pm.test('Rejected with 401', () => pm.response.to.have.status(401));",
+            "pm.test('Error code is INVALID_CREDENTIALS', () => pm.expect(j.code).to.eql('INVALID_CREDENTIALS'));"
+          ] } }],
+          "request": { "auth": { "type": "noauth" }, "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"email\":\"customer@shop.com\",\"password\":\"WrongPass1\"}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/auth/login" }
+        },
+        {
+          "name": "Login as seeded customer",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const j = pm.response.json();",
+            "pm.test('Login succeeds with 200', () => pm.response.to.have.status(200));",
+            "pm.test('User is the seeded customer', () => { pm.expect(j.data.user.email).to.eql('customer@shop.com'); pm.expect(j.data.user.role).to.eql('customer'); });",
+            "pm.test('Refresh token cookie is HttpOnly', () => { pm.expect(pm.response.headers.get('Set-Cookie') || '').to.include('HttpOnly'); });",
+            "pm.collectionVariables.set('accessToken', j.data.accessToken);",
+            "pm.collectionVariables.set('refreshToken', j.data.refreshToken);"
+          ] } }],
+          "request": { "auth": { "type": "noauth" }, "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"email\":\"customer@shop.com\",\"password\":\"Customer@123\"}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/auth/login" }
+        },
+        {
+          "name": "Get profile (GET /api/auth/me)",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const j = pm.response.json();",
+            "pm.test('Profile returned with 200', () => pm.response.to.have.status(200));",
+            "pm.test('Profile matches the logged-in user', () => pm.expect(j.data.user.email).to.eql('customer@shop.com'));"
+          ] } }],
+          "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/api/auth/me" }
+        },
+        {
+          "name": "Refresh token (rotation)",
+          "event": [
+            { "listen": "prerequest", "script": { "type": "text/javascript", "exec": [
+              "pm.collectionVariables.set('oldRefreshToken', pm.collectionVariables.get('refreshToken'));",
+              "pm.cookies.jar().clear(pm.collectionVariables.get('baseUrl'), function () {});"
+            ] } },
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "const j = pm.response.json();",
+              "pm.test('Refresh succeeds with 200', () => pm.response.to.have.status(200));",
+              "pm.test('New access token issued', () => pm.expect(j.data.accessToken).to.be.a('string'));",
+              "pm.test('Refresh token was rotated (new value)', () => pm.expect(j.data.refreshToken).to.not.eql(pm.collectionVariables.get('oldRefreshToken')));",
+              "pm.collectionVariables.set('accessToken', j.data.accessToken);",
+              "pm.collectionVariables.set('refreshToken', j.data.refreshToken);"
+            ] } }
+          ],
+          "request": { "auth": { "type": "noauth" }, "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"refreshToken\":\"{{refreshToken}}\"}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/auth/refresh" }
+        },
+        {
+          "name": "Re-using the old refresh token -> 401 (theft detection)",
+          "event": [
+            { "listen": "prerequest", "script": { "type": "text/javascript", "exec": [
+              "pm.cookies.jar().clear(pm.collectionVariables.get('baseUrl'), function () {});"
+            ] } },
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "const j = pm.response.json();",
+              "pm.test('Reused refresh token rejected with 401', () => pm.response.to.have.status(401));",
+              "pm.test('Error code is REFRESH_TOKEN_REUSED', () => pm.expect(j.code).to.eql('REFRESH_TOKEN_REUSED'));"
+            ] } }
+          ],
+          "request": { "auth": { "type": "noauth" }, "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"refreshToken\":\"{{oldRefreshToken}}\"}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/auth/refresh" }
+        },
+        {
+          "name": "Login as customer again (fresh session)",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const j = pm.response.json();",
+            "pm.test('Login succeeds with 200', () => pm.response.to.have.status(200));",
+            "pm.collectionVariables.set('accessToken', j.data.accessToken);",
+            "pm.collectionVariables.set('refreshToken', j.data.refreshToken);"
+          ] } }],
+          "request": { "auth": { "type": "noauth" }, "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"email\":\"customer@shop.com\",\"password\":\"Customer@123\"}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/auth/login" }
+        }
+      ]
+    },
+    {
+      "name": "2. RBAC & Authentication Failures (401 / 403)",
+      "item": [
+        {
+          "name": "No token -> 401",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('Rejected with 401', () => pm.response.to.have.status(401));",
+            "pm.test('Error code is NO_TOKEN', () => pm.expect(pm.response.json().code).to.eql('NO_TOKEN'));"
+          ] } }],
+          "request": { "auth": { "type": "noauth" }, "method": "GET", "header": [], "url": "{{baseUrl}}/api/orders/my" }
+        },
+        {
+          "name": "Malformed token -> 401",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('Rejected with 401', () => pm.response.to.have.status(401));",
+            "pm.test('Error code is TOKEN_INVALID', () => pm.expect(pm.response.json().code).to.eql('TOKEN_INVALID'));"
+          ] } }],
+          "request": { "auth": { "type": "noauth" }, "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer abc.def.ghi" }], "url": "{{baseUrl}}/api/orders/my" }
+        },
+        {
+          "name": "Customer lists ALL orders -> 403",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('Forbidden with 403', () => pm.response.to.have.status(403));",
+            "pm.test('Error code is FORBIDDEN', () => pm.expect(pm.response.json().code).to.eql('FORBIDDEN'));"
+          ] } }],
+          "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/api/orders" }
+        },
+        {
+          "name": "Customer creates a product -> 403",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('Forbidden with 403', () => pm.response.to.have.status(403));",
+            "pm.test('success is false', () => pm.expect(pm.response.json().success).to.be.false);"
+          ] } }],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"name\":\"Hacked\",\"sku\":\"HACK-1\",\"category\":\"X\",\"price\":1,\"stock\":1}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/products" }
+        },
+        {
+          "name": "Customer opens analytics -> 403",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('Forbidden with 403', () => pm.response.to.have.status(403));",
+            "pm.test('Error code is FORBIDDEN', () => pm.expect(pm.response.json().code).to.eql('FORBIDDEN'));"
+          ] } }],
+          "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/api/analytics/overview" }
+        },
+        {
+          "name": "Customer creates a coupon -> 403",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('Forbidden with 403', () => pm.response.to.have.status(403));",
+            "pm.test('Error code is FORBIDDEN', () => pm.expect(pm.response.json().code).to.eql('FORBIDDEN'));"
+          ] } }],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"code\":\"HACK100\",\"discountType\":\"flat\",\"discountValue\":100,\"expiryDate\":\"2030-01-01T00:00:00.000Z\"}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/coupons" }
+        }
+      ]
+    },
+    {
+      "name": "3. Product Catalogue (public)",
+      "item": [
+        {
+          "name": "Search product ELEC-001 (stores productId, stockBefore)",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const j = pm.response.json();",
+            "pm.test('Search returns 200', () => pm.response.to.have.status(200));",
+            "pm.test('Exactly one match for ELEC-001', () => { pm.expect(j.data).to.have.length(1); pm.expect(j.data[0].sku).to.eql('ELEC-001'); });",
+            "pm.test('Product exposes stock, threshold and rating fields', () => { const p = j.data[0]; pm.expect(p.stock).to.be.a('number'); pm.expect(p.lowStockThreshold).to.be.a('number'); pm.expect(p.numReviews).to.be.a('number'); });",
+            "pm.collectionVariables.set('productId', j.data[0]._id);",
+            "pm.collectionVariables.set('stockBefore', j.data[0].stock);",
+            "pm.collectionVariables.set('numReviewsBefore', j.data[0].numReviews);"
+          ] } }],
+          "request": { "auth": { "type": "noauth" }, "method": "GET", "header": [], "url": "{{baseUrl}}/api/products?search=ELEC-001" }
+        },
+        {
+          "name": "Search product BOOK-004 (stores productId2)",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const j = pm.response.json();",
+            "pm.test('Search returns 200', () => pm.response.to.have.status(200));",
+            "pm.test('Exactly one match for BOOK-004', () => { pm.expect(j.data).to.have.length(1); pm.expect(j.data[0].sku).to.eql('BOOK-004'); });",
+            "pm.collectionVariables.set('productId2', j.data[0]._id);"
+          ] } }],
+          "request": { "auth": { "type": "noauth" }, "method": "GET", "header": [], "url": "{{baseUrl}}/api/products?search=BOOK-004" }
+        },
+        {
+          "name": "Filter by category + price range, sort price_desc",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const j = pm.response.json();",
+            "pm.test('Filter returns 200', () => pm.response.to.have.status(200));",
+            "pm.test('All results are Electronics priced 1000-5000', () => { pm.expect(j.data.length).to.be.above(0); j.data.forEach(p => { pm.expect(p.category).to.eql('Electronics'); pm.expect(p.price).to.be.within(1000, 5000); }); });",
+            "pm.test('Results sorted by price descending', () => { for (let i = 1; i < j.data.length; i++) { pm.expect(j.data[i - 1].price).to.be.at.least(j.data[i].price); } });"
+          ] } }],
+          "request": { "auth": { "type": "noauth" }, "method": "GET", "header": [], "url": "{{baseUrl}}/api/products?category=Electronics&minPrice=1000&maxPrice=5000&sort=price_desc" }
+        },
+        {
+          "name": "Pagination (page 2, limit 5)",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const j = pm.response.json();",
+            "pm.test('Pagination returns 200', () => pm.response.to.have.status(200));",
+            "pm.test('Page metadata is correct', () => { pm.expect(j.pagination.page).to.eql(2); pm.expect(j.pagination.limit).to.eql(5); pm.expect(j.pagination.total).to.be.at.least(26); pm.expect(j.pagination.pages).to.be.at.least(6); });",
+            "pm.test('At most 5 items on the page', () => pm.expect(j.data.length).to.be.at.most(5));"
+          ] } }],
+          "request": { "auth": { "type": "noauth" }, "method": "GET", "header": [], "url": "{{baseUrl}}/api/products?limit=5&page=2&sort=name_asc" }
+        },
+        {
+          "name": "Invalid product id -> 400",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('Rejected with 400', () => pm.response.to.have.status(400));",
+            "pm.test('Error code is INVALID_ID', () => pm.expect(pm.response.json().code).to.eql('INVALID_ID'));"
+          ] } }],
+          "request": { "auth": { "type": "noauth" }, "method": "GET", "header": [], "url": "{{baseUrl}}/api/products/not-an-id" }
+        },
+        {
+          "name": "Unknown product id -> 404",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('Not found with 404', () => pm.response.to.have.status(404));",
+            "pm.test('Error code is PRODUCT_NOT_FOUND', () => pm.expect(pm.response.json().code).to.eql('PRODUCT_NOT_FOUND'));"
+          ] } }],
+          "request": { "auth": { "type": "noauth" }, "method": "GET", "header": [], "url": "{{baseUrl}}/api/products/64b000000000000000000000" }
+        }
+      ]
+    },
+    {
+      "name": "4. Coupon Validation (customer)",
+      "item": [
+        {
+          "name": "WELCOME10 valid, discount capped at 200",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const d = pm.response.json().data;",
+            "pm.test('Validate returns 200', () => pm.response.to.have.status(200));",
+            "pm.test('Coupon is valid (code matched case-insensitively)', () => { pm.expect(d.valid).to.be.true; pm.expect(d.code).to.eql('WELCOME10'); });",
+            "pm.test('10% discount is capped by maxDiscountAmount (200)', () => pm.expect(d.discountAmount).to.eql(200));",
+            "pm.test('finalAmount = subtotal - discount', () => pm.expect(d.finalAmount).to.eql(d.subtotal - d.discountAmount));"
+          ] } }],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"code\":\"welcome10\",\"items\":[{\"productId\":\"{{productId}}\",\"quantity\":1}]}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/coupons/validate" }
+        },
+        {
+          "name": "WELCOME10 below minimum order amount",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const d = pm.response.json().data;",
+            "pm.test('Validate returns 200', () => pm.response.to.have.status(200));",
+            "pm.test('Coupon not valid: minimum order not met', () => { pm.expect(d.valid).to.be.false; pm.expect(d.message).to.include('minimum'); pm.expect(d.discountAmount).to.eql(0); });"
+          ] } }],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"code\":\"WELCOME10\",\"subtotal\":100}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/coupons/validate" }
+        },
+        {
+          "name": "EXPIRED20 is rejected",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const d = pm.response.json().data;",
+            "pm.test('Validate returns 200', () => pm.response.to.have.status(200));",
+            "pm.test('Coupon not valid: expired', () => { pm.expect(d.valid).to.be.false; pm.expect(d.message).to.include('expired'); });"
+          ] } }],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"code\":\"EXPIRED20\",\"subtotal\":1000}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/coupons/validate" }
+        },
+        {
+          "name": "Unknown coupon code",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const d = pm.response.json().data;",
+            "pm.test('Validate returns 200', () => pm.response.to.have.status(200));",
+            "pm.test('Coupon not valid: unknown code', () => { pm.expect(d.valid).to.be.false; pm.expect(d.message).to.include('Invalid coupon code'); });"
+          ] } }],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"code\":\"NOSUCHCODE\",\"subtotal\":1000}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/coupons/validate" }
+        },
+        {
+          "name": "BIGSALE25 on 2 units, discount capped at 1000",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const d = pm.response.json().data;",
+            "pm.test('Validate returns 200', () => pm.response.to.have.status(200));",
+            "pm.test('Coupon valid for a 3000+ cart', () => { pm.expect(d.valid).to.be.true; pm.expect(d.subtotal).to.be.at.least(3000); });",
+            "pm.test('25% discount is capped at 1000', () => pm.expect(d.discountAmount).to.eql(1000));"
+          ] } }],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"code\":\"BIGSALE25\",\"items\":[{\"productId\":\"{{productId}}\",\"quantity\":2}]}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/coupons/validate" }
+        }
+      ]
+    },
+    {
+      "name": "5. Order Checkout & Atomic Stock",
+      "item": [
+        {
+          "name": "Checkout 2 units with WELCOME10",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const o = pm.response.json().data;",
+            "pm.test('Order created with 201', () => pm.response.to.have.status(201));",
+            "pm.test('Order starts as pending with one history entry', () => { pm.expect(o.status).to.eql('pending'); pm.expect(o.statusHistory).to.have.length(1); });",
+            "pm.test('Coupon applied and capped at 200', () => { pm.expect(o.couponCode).to.eql('WELCOME10'); pm.expect(o.discountAmount).to.eql(200); });",
+            "pm.test('Totals are consistent (price snapshot x qty - discount)', () => { pm.expect(o.subtotal).to.eql(o.items[0].price * 2); pm.expect(o.totalAmount).to.eql(o.subtotal - o.discountAmount); });",
+            "pm.collectionVariables.set('orderId', o._id);"
+          ] } }],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"items\":[{\"productId\":\"{{productId}}\",\"quantity\":2}],\"shippingAddress\":{\"fullName\":\"Postman Tester\",\"phone\":\"9000000099\",\"line1\":\"1 Test Street\",\"city\":\"Bengaluru\",\"state\":\"Karnataka\",\"postalCode\":\"560001\"},\"paymentMethod\":\"upi\",\"couponCode\":\"WELCOME10\"}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/orders" }
+        },
+        {
+          "name": "Stock was decremented by exactly 2",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const p = pm.response.json().data;",
+            "pm.test('Product fetched with 200', () => pm.response.to.have.status(200));",
+            "pm.test('Stock = stockBefore - 2', () => pm.expect(p.stock).to.eql(Number(pm.collectionVariables.get('stockBefore')) - 2));",
+            "pm.collectionVariables.set('stockAfterOrder', p.stock);"
+          ] } }],
+          "request": { "auth": { "type": "noauth" }, "method": "GET", "header": [], "url": "{{baseUrl}}/api/products/{{productId}}" }
+        },
+        {
+          "name": "Same coupon again -> 400 (single use per user)",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const j = pm.response.json();",
+            "pm.test('Rejected with 400', () => pm.response.to.have.status(400));",
+            "pm.test('Error code is COUPON_INVALID', () => pm.expect(j.code).to.eql('COUPON_INVALID'));",
+            "pm.test('Message says already used', () => pm.expect(j.message).to.include('already used'));"
+          ] } }],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"items\":[{\"productId\":\"{{productId}}\",\"quantity\":1}],\"shippingAddress\":{\"fullName\":\"Postman Tester\",\"phone\":\"9000000099\",\"line1\":\"1 Test Street\",\"city\":\"Bengaluru\",\"state\":\"Karnataka\",\"postalCode\":\"560001\"},\"couponCode\":\"WELCOME10\"}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/orders" }
+        },
+        {
+          "name": "Quantity above stock -> 409 INSUFFICIENT_STOCK",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const j = pm.response.json();",
+            "pm.test('Rejected with 409', () => pm.response.to.have.status(409));",
+            "pm.test('Error code is INSUFFICIENT_STOCK', () => pm.expect(j.code).to.eql('INSUFFICIENT_STOCK'));",
+            "pm.test('Error lists requested vs available units', () => { pm.expect(j.errors[0].requested).to.eql(99999); pm.expect(j.errors[0].available).to.be.a('number'); });"
+          ] } }],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"items\":[{\"productId\":\"{{productId}}\",\"quantity\":99999}],\"shippingAddress\":{\"fullName\":\"Postman Tester\",\"phone\":\"9000000099\",\"line1\":\"1 Test Street\",\"city\":\"Bengaluru\",\"state\":\"Karnataka\",\"postalCode\":\"560001\"}}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/orders" }
+        },
+        {
+          "name": "Missing shipping address -> 400 (validated before touching stock)",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const j = pm.response.json();",
+            "pm.test('Rejected with 400', () => pm.response.to.have.status(400));",
+            "pm.test('Error code is VALIDATION_ERROR', () => pm.expect(j.code).to.eql('VALIDATION_ERROR'));"
+          ] } }],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"items\":[{\"productId\":\"{{productId}}\",\"quantity\":1}]}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/orders" }
+        },
+        {
+          "name": "Stock unchanged after the failed checkouts",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const p = pm.response.json().data;",
+            "pm.test('Product fetched with 200', () => pm.response.to.have.status(200));",
+            "pm.test('Failed checkouts did not change stock', () => pm.expect(p.stock).to.eql(Number(pm.collectionVariables.get('stockAfterOrder'))));"
+          ] } }],
+          "request": { "auth": { "type": "noauth" }, "method": "GET", "header": [], "url": "{{baseUrl}}/api/products/{{productId}}" }
+        },
+        {
+          "name": "Checkout 1 unit without coupon (to be cancelled)",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const o = pm.response.json().data;",
+            "pm.test('Order created with 201', () => pm.response.to.have.status(201));",
+            "pm.test('No discount applied', () => { pm.expect(o.discountAmount).to.eql(0); pm.expect(o.totalAmount).to.eql(o.subtotal); });",
+            "pm.collectionVariables.set('cancelOrderId', o._id);"
+          ] } }],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"items\":[{\"productId\":\"{{productId}}\",\"quantity\":1}],\"shippingAddress\":{\"fullName\":\"Postman Tester\",\"phone\":\"9000000099\",\"line1\":\"1 Test Street\",\"city\":\"Bengaluru\",\"state\":\"Karnataka\",\"postalCode\":\"560001\"}}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/orders" }
+        },
+        {
+          "name": "Customer cancels the order",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const o = pm.response.json().data;",
+            "pm.test('Cancel succeeds with 200', () => pm.response.to.have.status(200));",
+            "pm.test('Order is cancelled and stock restored flag is set', () => { pm.expect(o.status).to.eql('cancelled'); pm.expect(o.stockRestored).to.be.true; });",
+            "pm.test('History ends with cancelled', () => pm.expect(o.statusHistory[o.statusHistory.length - 1].status).to.eql('cancelled'));"
+          ] } }],
+          "request": { "method": "PATCH", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"note\":\"Changed my mind\"}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/orders/{{cancelOrderId}}/cancel" }
+        },
+        {
+          "name": "Stock restored after cancellation",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const p = pm.response.json().data;",
+            "pm.test('Product fetched with 200', () => pm.response.to.have.status(200));",
+            "pm.test('Stock is back to the value after the first order', () => pm.expect(p.stock).to.eql(Number(pm.collectionVariables.get('stockAfterOrder'))));"
+          ] } }],
+          "request": { "auth": { "type": "noauth" }, "method": "GET", "header": [], "url": "{{baseUrl}}/api/products/{{productId}}" }
+        },
+        {
+          "name": "Cancelling again -> 400 (final state)",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('Rejected with 400', () => pm.response.to.have.status(400));",
+            "pm.test('Error code is INVALID_STATUS_TRANSITION', () => pm.expect(pm.response.json().code).to.eql('INVALID_STATUS_TRANSITION'));"
+          ] } }],
+          "request": { "method": "PATCH", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/orders/{{cancelOrderId}}/cancel" }
+        },
+        {
+          "name": "My orders contain the new order",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const j = pm.response.json();",
+            "pm.test('List returns 200', () => pm.response.to.have.status(200));",
+            "pm.test('Newest orders are listed first and include the coupon order', () => pm.expect(j.data.some(o => o._id === pm.collectionVariables.get('orderId'))).to.be.true);",
+            "pm.test('Pagination metadata present', () => pm.expect(j.pagination.total).to.be.at.least(6));"
+          ] } }],
+          "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/api/orders/my" }
+        }
+      ]
+    },
+    {
+      "name": "6. Reviews & Ratings (customer)",
+      "item": [
+        {
+          "name": "Add a review (verified purchase)",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const r = pm.response.json().data;",
+            "pm.test('Review created with 201', () => pm.response.to.have.status(201));",
+            "pm.test('Review stores rating and is flagged as verified purchase', () => { pm.expect(r.rating).to.eql(5); pm.expect(r.isVerifiedPurchase).to.be.true; });",
+            "pm.collectionVariables.set('reviewId', r._id);"
+          ] } }],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"rating\":5,\"title\":\"Great earbuds\",\"comment\":\"Clear sound and long battery life.\"}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/products/{{productId}}/reviews" }
+        },
+        {
+          "name": "Second review on the same product -> 409",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('Rejected with 409', () => pm.response.to.have.status(409));",
+            "pm.test('Error code is REVIEW_EXISTS', () => pm.expect(pm.response.json().code).to.eql('REVIEW_EXISTS'));"
+          ] } }],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"rating\":3,\"title\":\"Trying again\"}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/products/{{productId}}/reviews" }
+        },
+        {
+          "name": "Rating outside 1-5 -> 400",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const j = pm.response.json();",
+            "pm.test('Rejected with 400', () => pm.response.to.have.status(400));",
+            "pm.test('Validation error points at the rating field', () => { pm.expect(j.code).to.eql('VALIDATION_ERROR'); pm.expect(j.errors.some(e => e.field === 'rating')).to.be.true; });"
+          ] } }],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"rating\":9,\"title\":\"Off the scale\"}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/products/{{productId2}}/reviews" }
+        },
+        {
+          "name": "Update own review",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const r = pm.response.json().data;",
+            "pm.test('Update succeeds with 200', () => pm.response.to.have.status(200));",
+            "pm.test('Rating and title updated', () => { pm.expect(r.rating).to.eql(4); pm.expect(r.title).to.eql('Good earbuds'); });"
+          ] } }],
+          "request": { "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"rating\":4,\"title\":\"Good earbuds\"}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/reviews/{{reviewId}}" }
+        },
+        {
+          "name": "List product reviews (public)",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const j = pm.response.json();",
+            "pm.test('List returns 200', () => pm.response.to.have.status(200));",
+            "pm.test('Our review is listed', () => pm.expect(j.data.some(r => r._id === pm.collectionVariables.get('reviewId'))).to.be.true);",
+            "pm.test('Summary exposes averageRating and numReviews', () => { pm.expect(j.summary.averageRating).to.be.a('number'); pm.expect(j.summary.numReviews).to.be.a('number'); });"
+          ] } }],
+          "request": { "auth": { "type": "noauth" }, "method": "GET", "header": [], "url": "{{baseUrl}}/api/products/{{productId}}/reviews?sort=newest" }
+        },
+        {
+          "name": "Product rating recalculated by the review:updated event",
+          "event": [
+            { "listen": "prerequest", "script": { "type": "text/javascript", "exec": ["setTimeout(function () {}, 500);"] } },
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "const p = pm.response.json().data;",
+              "pm.test('Product fetched with 200', () => pm.response.to.have.status(200));",
+              "pm.test('numReviews increased by exactly 1', () => pm.expect(p.numReviews).to.eql(Number(pm.collectionVariables.get('numReviewsBefore')) + 1));",
+              "pm.test('averageRating is within 1-5', () => pm.expect(p.averageRating).to.be.within(1, 5));"
+            ] } }
+          ],
+          "request": { "auth": { "type": "noauth" }, "method": "GET", "header": [], "url": "{{baseUrl}}/api/products/{{productId}}" }
+        },
+        {
+          "name": "Delete own review",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('Delete succeeds with 200', () => pm.response.to.have.status(200));",
+            "pm.test('success is true', () => pm.expect(pm.response.json().success).to.be.true);"
+          ] } }],
+          "request": { "method": "DELETE", "header": [], "url": "{{baseUrl}}/api/reviews/{{reviewId}}" }
+        },
+        {
+          "name": "Product rating restored after deletion",
+          "event": [
+            { "listen": "prerequest", "script": { "type": "text/javascript", "exec": ["setTimeout(function () {}, 500);"] } },
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "const p = pm.response.json().data;",
+              "pm.test('Product fetched with 200', () => pm.response.to.have.status(200));",
+              "pm.test('numReviews is back to the original value', () => pm.expect(p.numReviews).to.eql(Number(pm.collectionVariables.get('numReviewsBefore'))));"
+            ] } }
+          ],
+          "request": { "auth": { "type": "noauth" }, "method": "GET", "header": [], "url": "{{baseUrl}}/api/products/{{productId}}" }
+        }
+      ]
+    },
+    {
+      "name": "7. Wishlist & Recommendations",
+      "item": [
+        {
+          "name": "Add product to wishlist",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('Added (201) or already present (200)', () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+            "pm.test('Wishlist count returned', () => pm.expect(pm.response.json().data.count).to.be.at.least(1));"
+          ] } }],
+          "request": { "method": "POST", "header": [], "url": "{{baseUrl}}/api/wishlist/{{productId}}" }
+        },
+        {
+          "name": "Get wishlist contains the product",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const j = pm.response.json();",
+            "pm.test('Wishlist returns 200', () => pm.response.to.have.status(200));",
+            "pm.test('Wishlist contains the product', () => pm.expect(j.data.items.some(i => i.product._id === pm.collectionVariables.get('productId'))).to.be.true);"
+          ] } }],
+          "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/api/wishlist" }
+        },
+        {
+          "name": "Remove product from wishlist",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('Removed with 200', () => pm.response.to.have.status(200));",
+            "pm.test('success is true', () => pm.expect(pm.response.json().success).to.be.true);"
+          ] } }],
+          "request": { "method": "DELETE", "header": [], "url": "{{baseUrl}}/api/wishlist/{{productId}}" }
+        },
+        {
+          "name": "Recommendations: personalized for a customer with history",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const d = pm.response.json().data;",
+            "const purchased = ['ELEC-001', 'ELEC-004', 'BOOK-001', 'BOOK-002', 'BOOK-003', 'SPRT-001', 'SPRT-003', 'SPRT-004'];",
+            "pm.test('Recommendations return 200', () => pm.response.to.have.status(200));",
+            "pm.test('Strategy is personalized and categories come from orders', () => { pm.expect(d.strategy).to.eql('personalized'); pm.expect(d.preferredCategories).to.include.members(['Electronics', 'Books']); });",
+            "pm.test('Non-empty, in stock, each with a reason', () => { pm.expect(d.recommendations.length).to.be.above(0); d.recommendations.forEach(p => { pm.expect(p.stock).to.be.above(0); pm.expect(p.reason).to.be.a('string'); }); });",
+            "pm.test('Already purchased products are excluded', () => d.recommendations.forEach(p => pm.expect(purchased).to.not.include(p.sku)));"
+          ] } }],
+          "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/api/recommendations?limit=8" }
+        },
+        {
+          "name": "Recommendations: fallback for a brand-new user",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const d = pm.response.json().data;",
+            "pm.test('Recommendations return 200', () => pm.response.to.have.status(200));",
+            "pm.test('Strategy is fallback with no preferred categories', () => { pm.expect(d.strategy).to.eql('fallback'); pm.expect(d.preferredCategories).to.have.length(0); });",
+            "pm.test('Top-rated products returned in descending rating order', () => { pm.expect(d.recommendations.length).to.be.above(0); for (let i = 1; i < d.recommendations.length; i++) { pm.expect(d.recommendations[i - 1].averageRating).to.be.at.least(d.recommendations[i].averageRating); } });"
+          ] } }],
+          "request": { "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{newUserToken}}", "type": "string" }] }, "method": "GET", "header": [], "url": "{{baseUrl}}/api/recommendations" }
+        }
+      ]
+    },
+    {
+      "name": "8. Admin Operations (products, order lifecycle, coupons)",
+      "item": [
+        {
+          "name": "Login as Admin",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const j = pm.response.json();",
+            "pm.test('Login succeeds with 200', () => pm.response.to.have.status(200));",
+            "pm.test('User is the seeded admin', () => pm.expect(j.data.user.role).to.eql('admin'));",
+            "pm.collectionVariables.set('accessToken', j.data.accessToken);",
+            "pm.collectionVariables.set('refreshToken', j.data.refreshToken);"
+          ] } }],
+          "request": { "auth": { "type": "noauth" }, "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"email\":\"admin@shop.com\",\"password\":\"Admin@123\"}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/auth/login" }
+        },
+        {
+          "name": "Create product",
+          "event": [
+            { "listen": "prerequest", "script": { "type": "text/javascript", "exec": ["pm.collectionVariables.set('newSku', 'PM-' + Date.now());"] } },
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "const p = pm.response.json().data;",
+              "pm.test('Product created with 201', () => pm.response.to.have.status(201));",
+              "pm.test('SKU stored in uppercase, stock above threshold', () => { pm.expect(p.sku).to.eql(pm.collectionVariables.get('newSku').toUpperCase()); pm.expect(p.isLowStock).to.be.false; });",
+              "pm.collectionVariables.set('newProductId', p._id);"
+            ] } }
+          ],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"name\":\"Postman Test Product\",\"description\":\"Created by the Postman suite\",\"sku\":\"{{newSku}}\",\"category\":\"Electronics\",\"price\":999,\"stock\":50,\"lowStockThreshold\":10}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/products" }
+        },
+        {
+          "name": "Duplicate SKU -> 409",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('Rejected with 409', () => pm.response.to.have.status(409));",
+            "pm.test('Error code is DUPLICATE_KEY', () => pm.expect(pm.response.json().code).to.eql('DUPLICATE_KEY'));"
+          ] } }],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"name\":\"Duplicate\",\"sku\":\"{{newSku}}\",\"category\":\"Electronics\",\"price\":10,\"stock\":1}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/products" }
+        },
+        {
+          "name": "Update product (stock drops below threshold; averageRating write is ignored)",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const p = pm.response.json().data;",
+            "pm.test('Update succeeds with 200', () => pm.response.to.have.status(200));",
+            "pm.test('Price and stock updated, low-stock flag raised', () => { pm.expect(p.price).to.eql(1099); pm.expect(p.stock).to.eql(4); pm.expect(p.isLowStock).to.be.true; });",
+            "pm.test('averageRating cannot be set by the client (mass-assignment blocked)', () => pm.expect(p.averageRating).to.eql(0));"
+          ] } }],
+          "request": { "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"price\":1099,\"stock\":4,\"averageRating\":5}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/products/{{newProductId}}" }
+        },
+        {
+          "name": "Low-stock list includes the product",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const j = pm.response.json();",
+            "pm.test('Low-stock list returns 200', () => pm.response.to.have.status(200));",
+            "pm.test('Updated product is in the low-stock list', () => pm.expect(j.data.some(p => p._id === pm.collectionVariables.get('newProductId'))).to.be.true);",
+            "pm.test('Every listed product is at or below its threshold', () => j.data.forEach(p => pm.expect(p.stock).to.be.at.most(p.lowStockThreshold)));"
+          ] } }],
+          "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/api/products/low-stock" }
+        },
+        {
+          "name": "Invalid transition pending -> delivered -> 400",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const j = pm.response.json();",
+            "pm.test('Rejected with 400', () => pm.response.to.have.status(400));",
+            "pm.test('Error code is INVALID_STATUS_TRANSITION', () => pm.expect(j.code).to.eql('INVALID_STATUS_TRANSITION'));",
+            "pm.test('Message lists the allowed next statuses', () => pm.expect(j.message).to.include('confirmed'));"
+          ] } }],
+          "request": { "method": "PATCH", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"status\":\"delivered\"}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/orders/{{orderId}}/status" }
+        },
+        {
+          "name": "Order pending -> confirmed",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const o = pm.response.json().data;",
+            "pm.test('Update succeeds with 200', () => pm.response.to.have.status(200));",
+            "pm.test('Status is confirmed with 2 history entries', () => { pm.expect(o.status).to.eql('confirmed'); pm.expect(o.statusHistory).to.have.length(2); });"
+          ] } }],
+          "request": { "method": "PATCH", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"status\":\"confirmed\",\"note\":\"Payment verified\"}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/orders/{{orderId}}/status" }
+        },
+        {
+          "name": "Order confirmed -> shipped",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const o = pm.response.json().data;",
+            "pm.test('Update succeeds with 200', () => pm.response.to.have.status(200));",
+            "pm.test('Status is shipped', () => pm.expect(o.status).to.eql('shipped'));"
+          ] } }],
+          "request": { "method": "PATCH", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"status\":\"shipped\"}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/orders/{{orderId}}/status" }
+        },
+        {
+          "name": "Order shipped -> delivered",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const o = pm.response.json().data;",
+            "pm.test('Update succeeds with 200', () => pm.response.to.have.status(200));",
+            "pm.test('Status is delivered and deliveredAt is set', () => { pm.expect(o.status).to.eql('delivered'); pm.expect(o.deliveredAt).to.be.a('string'); });"
+          ] } }],
+          "request": { "method": "PATCH", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"status\":\"delivered\"}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/orders/{{orderId}}/status" }
+        },
+        {
+          "name": "Delete (deactivate) the test product",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const p = pm.response.json().data;",
+            "pm.test('Delete succeeds with 200', () => pm.response.to.have.status(200));",
+            "pm.test('Product is soft-deleted (isActive false)', () => pm.expect(p.isActive).to.be.false);"
+          ] } }],
+          "request": { "method": "DELETE", "header": [], "url": "{{baseUrl}}/api/products/{{newProductId}}" }
+        },
+        {
+          "name": "Deleted product is hidden from the public catalogue",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('Not found with 404', () => pm.response.to.have.status(404));",
+            "pm.test('Error code is PRODUCT_NOT_FOUND', () => pm.expect(pm.response.json().code).to.eql('PRODUCT_NOT_FOUND'));"
+          ] } }],
+          "request": { "auth": { "type": "noauth" }, "method": "GET", "header": [], "url": "{{baseUrl}}/api/products/{{newProductId}}" }
+        },
+        {
+          "name": "Create coupon",
+          "event": [
+            { "listen": "prerequest", "script": { "type": "text/javascript", "exec": [
+              "pm.collectionVariables.set('newCouponCode', 'PM' + Date.now());",
+              "pm.collectionVariables.set('couponExpiry', new Date(Date.now() + 30 * 86400000).toISOString());"
+            ] } },
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "const c = pm.response.json().data;",
+              "pm.test('Coupon created with 201', () => pm.response.to.have.status(201));",
+              "pm.test('Code stored in uppercase, no redemptions yet', () => { pm.expect(c.code).to.eql(pm.collectionVariables.get('newCouponCode').toUpperCase()); pm.expect(c.usedCount).to.eql(0); pm.expect(c.usedBy).to.have.length(0); });",
+              "pm.collectionVariables.set('couponId', c._id);"
+            ] } }
+          ],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"code\":\"{{newCouponCode}}\",\"description\":\"Postman test coupon\",\"discountType\":\"percentage\",\"discountValue\":15,\"minOrderAmount\":1000,\"maxDiscountAmount\":500,\"expiryDate\":\"{{couponExpiry}}\",\"usageLimit\":5}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/coupons" }
+        },
+        {
+          "name": "Update coupon (code is immutable)",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const c = pm.response.json().data;",
+            "pm.test('Update succeeds with 200', () => pm.response.to.have.status(200));",
+            "pm.test('discountValue changed but the code did not', () => { pm.expect(c.discountValue).to.eql(20); pm.expect(c.code).to.eql(pm.collectionVariables.get('newCouponCode').toUpperCase()); });"
+          ] } }],
+          "request": { "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"discountValue\":20,\"code\":\"HACKED\"}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/coupons/{{couponId}}" }
+        },
+        {
+          "name": "Delete coupon",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('Delete succeeds with 200', () => pm.response.to.have.status(200));",
+            "pm.test('success is true', () => pm.expect(pm.response.json().success).to.be.true);"
+          ] } }],
+          "request": { "method": "DELETE", "header": [], "url": "{{baseUrl}}/api/coupons/{{couponId}}" }
+        }
+      ]
+    },
+    {
+      "name": "9. Analytics Dashboard (admin)",
+      "item": [
+        {
+          "name": "Overview KPIs",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const d = pm.response.json().data;",
+            "pm.test('Overview returns 200', () => pm.response.to.have.status(200));",
+            "pm.test('Revenue and order totals are numeric', () => { pm.expect(d.totalRevenue).to.be.a('number').above(0); pm.expect(d.totalOrders).to.be.at.least(30); });",
+            "pm.test('Top 5 products sorted by units sold', () => { pm.expect(d.topProducts).to.have.length(5); for (let i = 1; i < d.topProducts.length; i++) { pm.expect(d.topProducts[i - 1].unitsSold).to.be.at.least(d.topProducts[i].unitsSold); } });",
+            "pm.test('Coupon redemption stats include WELCOME10', () => { pm.expect(d.couponStats.totalCoupons).to.be.at.least(6); pm.expect(d.couponStats.byCoupon.some(c => c.code === 'WELCOME10')).to.be.true; });",
+            "pm.test('Orders grouped by every status', () => ['pending', 'confirmed', 'shipped', 'delivered', 'cancelled'].forEach(s => pm.expect(d.ordersByStatus).to.have.property(s)));"
+          ] } }],
+          "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/api/analytics/overview" }
+        },
+        {
+          "name": "Sales by date (daily, last 90 days)",
+          "event": [
+            { "listen": "prerequest", "script": { "type": "text/javascript", "exec": [
+              "const fmt = (d) => d.toISOString().slice(0, 10);",
+              "pm.collectionVariables.set('startDate', fmt(new Date(Date.now() - 90 * 86400000)));",
+              "pm.collectionVariables.set('endDate', fmt(new Date()));"
+            ] } },
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "const d = pm.response.json().data;",
+              "pm.test('Sales by date returns 200', () => pm.response.to.have.status(200));",
+              "pm.test('Grouped by day, periods ascending', () => { pm.expect(d.groupBy).to.eql('day'); pm.expect(d.series.length).to.be.above(0); d.series.forEach(s => pm.expect(s.period).to.match(/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/)); for (let i = 1; i < d.series.length; i++) { pm.expect(d.series[i - 1].period < d.series[i].period).to.be.true; } });",
+              "pm.test('averageOrderValue = revenue / orderCount', () => d.series.forEach(s => pm.expect(Math.abs(s.averageOrderValue - s.revenue / s.orderCount)).to.be.below(0.02)));",
+              "pm.test('Summary order count equals the sum of the series', () => pm.expect(d.summary.totalOrders).to.eql(d.series.reduce((a, s) => a + s.orderCount, 0)));"
+            ] } }
+          ],
+          "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/api/analytics/sales-by-date?startDate={{startDate}}&endDate={{endDate}}&groupBy=day" }
+        },
+        {
+          "name": "Sales by date (monthly)",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const d = pm.response.json().data;",
+            "pm.test('Sales by month returns 200', () => pm.response.to.have.status(200));",
+            "pm.test('Periods are YYYY-MM and span at least 2 months', () => { pm.expect(d.groupBy).to.eql('month'); pm.expect(d.series.length).to.be.at.least(2); d.series.forEach(s => pm.expect(s.period).to.match(/^[0-9]{4}-[0-9]{2}$/)); });",
+            "pm.test('Discounts and revenue are numeric', () => d.series.forEach(s => { pm.expect(s.revenue).to.be.a('number'); pm.expect(s.totalDiscounts).to.be.a('number'); }));"
+          ] } }],
+          "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/api/analytics/sales-by-date?groupBy=month" }
+        },
+        {
+          "name": "Invalid groupBy -> 400",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('Rejected with 400', () => pm.response.to.have.status(400));",
+            "pm.test('Error code is VALIDATION_ERROR', () => pm.expect(pm.response.json().code).to.eql('VALIDATION_ERROR'));"
+          ] } }],
+          "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/api/analytics/sales-by-date?groupBy=year" }
+        },
+        {
+          "name": "Sales and inventory by category",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const d = pm.response.json().data;",
+            "pm.test('Category report returns 200', () => pm.response.to.have.status(200));",
+            "pm.test('All 6 seeded categories present, Electronics sold units', () => { pm.expect(d.categories.length).to.be.at.least(6); const e = d.categories.find(c => c.category === 'Electronics'); pm.expect(e).to.exist; pm.expect(e.unitsSold).to.be.above(0); });",
+            "pm.test('Net revenue never exceeds gross revenue', () => d.categories.forEach(c => pm.expect(c.netRevenue).to.be.at.most(c.grossRevenue + 0.01)));",
+            "pm.test('Inventory fields present and low-stock items counted', () => { d.categories.forEach(c => { pm.expect(c.currentStock).to.be.a('number'); pm.expect(c.inventoryValuation).to.be.a('number'); }); pm.expect(d.totals.lowStockItems).to.be.at.least(5); });",
+            "pm.test('Totals equal the sum of categories', () => pm.expect(d.totals.unitsSold).to.eql(d.categories.reduce((a, c) => a + c.unitsSold, 0)));"
+          ] } }],
+          "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/api/analytics/sales-by-category" }
+        }
+      ]
+    },
+    {
+      "name": "10. Manager Role",
+      "item": [
+        {
+          "name": "Login as Manager",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const j = pm.response.json();",
+            "pm.test('Login succeeds with 200', () => pm.response.to.have.status(200));",
+            "pm.test('User is the seeded manager', () => pm.expect(j.data.user.role).to.eql('manager'));",
+            "pm.collectionVariables.set('accessToken', j.data.accessToken);",
+            "pm.collectionVariables.set('refreshToken', j.data.refreshToken);"
+          ] } }],
+          "request": { "auth": { "type": "noauth" }, "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"email\":\"manager@shop.com\",\"password\":\"Manager@123\"}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/auth/login" }
+        },
+        {
+          "name": "Manager can view analytics",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('Manager allowed with 200', () => pm.response.to.have.status(200));",
+            "pm.test('KPI data returned', () => pm.expect(pm.response.json().data.totalOrders).to.be.a('number'));"
+          ] } }],
+          "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/api/analytics/overview" }
+        },
+        {
+          "name": "Manager cannot create coupons -> 403 (admin only)",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('Forbidden with 403', () => pm.response.to.have.status(403));",
+            "pm.test('Error code is FORBIDDEN', () => pm.expect(pm.response.json().code).to.eql('FORBIDDEN'));"
+          ] } }],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"code\":\"MGR100\",\"discountType\":\"flat\",\"discountValue\":100,\"expiryDate\":\"2030-01-01T00:00:00.000Z\"}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/coupons" }
+        }
+      ]
+    },
+    {
+      "name": "11. Logout",
+      "item": [
+        {
+          "name": "Logout (revokes the refresh token)",
+          "event": [
+            { "listen": "prerequest", "script": { "type": "text/javascript", "exec": ["pm.cookies.jar().clear(pm.collectionVariables.get('baseUrl'), function () {});"] } },
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('Logout succeeds with 200', () => pm.response.to.have.status(200));",
+              "pm.test('success is true', () => pm.expect(pm.response.json().success).to.be.true);"
+            ] } }
+          ],
+          "request": { "auth": { "type": "noauth" }, "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"refreshToken\":\"{{refreshToken}}\"}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/auth/logout" }
+        },
+        {
+          "name": "Refresh after logout -> 401",
+          "event": [
+            { "listen": "prerequest", "script": { "type": "text/javascript", "exec": ["pm.cookies.jar().clear(pm.collectionVariables.get('baseUrl'), function () {});"] } },
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('Revoked refresh token rejected with 401', () => pm.response.to.have.status(401));",
+              "pm.test('success is false', () => pm.expect(pm.response.json().success).to.be.false);"
+            ] } }
+          ],
+          "request": { "auth": { "type": "noauth" }, "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"refreshToken\":\"{{refreshToken}}\"}", "options": { "raw": { "language": "json" } } },
+            "url": "{{baseUrl}}/api/auth/refresh" }
+        }
+      ]
+    }
+  ]
+}
